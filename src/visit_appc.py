@@ -15,6 +15,8 @@ app.logger.setLevel(logging.INFO)
 PORT = 54545
 HOST = "0.0.0.0"
 
+logging.basicConfig(filename='visit_appcenter.log', level = logging.DEBUG,
+     format='%(asctime)s %(levelname)s :%(message)s')
 
 def exec_query_cmd(files, keywords):
   cmdStr = "grep -10 -r"
@@ -167,4 +169,5 @@ if __name__ == '__main__':
   app.logger.info("1./app_center/v1/query_log <must:log_file> <optional:query_keyword>")
   app.logger.info('2./app_center/v1/get_config <must:config_file> <optional:config_key>')
   app.logger.info('3./app_center/v1/update_config <must:config_file>')
+  #app.run(host=HOST, port=PORT, ssl_context='adhoc')
   app.run(host=HOST, port=PORT)
