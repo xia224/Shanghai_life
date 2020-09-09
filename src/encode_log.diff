@@ -1,0 +1,813 @@
+diff --git a/database/BUILD b/database/BUILD
+index f291b2d..3f04a5e 100644
+--- a/database/BUILD
++++ b/database/BUILD
+@@ -1,17 +1,11 @@
+ LDFLAGS = []
+ 
+-if PLATFORM == 32:
+-  LDFLAGS = [
+-      "-Wl,-Bstatic,-lmysqlcppconn-static",
+-      "-lmysqlclient",
+-      "-lz",
+-      "-Wl,-Bdynamic",
+-      ]
+-elif PLATFORM == 64:
+-  LDFLAGS = [
+-      "-lmysqlcppconn",
+-      "-lz",
+-      ]
++LDFLAGS = [
++    "-Wl,-Bstatic,-lmysqlcppconn-static",
++    "-lmysqlclient",
++    "-lz",
++    "-Wl,-Bdynamic",
++    ]
+ 
+ cc_library(name = "database",
+            cppflags = [
+diff --git a/json/BUILD b/json/BUILD
+index 011695f..12e9b54 100644
+--- a/json/BUILD
++++ b/json/BUILD
+@@ -7,9 +7,31 @@ cc_library(name = "json_packet",
+            ]
+ )
+ 
++cc_library(name = "json_utils",
++           cppflags = [
++             "-Imedia_server_library",
++             "-Imedia_server_library/third_party",
++           ],
++           srcs = [
++             "json_utils.cpp"
++           ],
++           excludes = [
++
++           ],
++           ldflags = [
++           ],
++           deps = [
++             "//media_server_library/base/BUILD:base",
++             "//media_server_library/network/BUILD:address_utility",
++             "//media_server_library/logging/BUILD:logging",
++             "//third_party/BUILD:jsoncpp",
++           ],
++)
++
+ cc_test(name = "json_test.exe",
+         srcs = [
+-          "*_test.cpp",
++          "binding_test.cpp",
++          "json_binding_test.cpp",
+         ],
+         cppflags = [
+           "-Imedia_server_library",
+@@ -24,3 +46,19 @@ cc_test(name = "json_test.exe",
+         ]
+ )
+ 
++cc_test(name = "json_utils_test.exe",
++        srcs = [
++          "json_utils_test.cpp",
++        ],
++        cppflags = [
++          "-Imedia_server_library",
++          "-Imedia_server_library/third_party",
++        ],
++        ldflags = [
++        ],
++        deps = [
++          ":json_utils",
++          "//media_server_library/base/BUILD:base",
++          "//third_party/BUILD:jsoncpp",
++        ]
++)
+diff --git a/json/json_utils.cpp b/json/json_utils.cpp
+new file mode 100644
+index 0000000..15ea719
+--- /dev/null
++++ b/json/json_utils.cpp
+@@ -0,0 +1,431 @@
++// Copyright (c) 2014-2017 Agora.io, Inc.
++// Created by shanhui.
++//
++
++#include "media_server_library/json/json_utils.h"
++
++#include <rapidjson/stringbuffer.h>
++#include <rapidjson/writer.h>
++
++#include <algorithm>
++#include <memory>
++#include <sstream>
++
++#include "media_server_library/logging/log.h"
++#include "media_server_library/network/address_utility.h"
++
++namespace agora {
++namespace json {
++
++std::string JsonUtils::JsonToString(const Json::Value &root) {
++  Json::StreamWriterBuilder builder;
++  builder.settings_["indentation"] = "";
++  std::unique_ptr<Json::StreamWriter> writer(builder.newStreamWriter());
++  std::stringstream ss;
++  writer->write(root, &ss);
++  return ss.str();
++}
++
++bool JsonUtils::StringToJson(const std::string &json_str, Json::Value *root) {
++  std::stringstream ss{json_str};
++  Json::CharReaderBuilder builder;
++  std::string errs;
++  bool ret = Json::parseFromStream(builder, ss, root, &errs);
++  if (!ret || root->isNull()) {
++    return false;
++  }
++  return true;
++}
++
++std::pair<bool, std::string> JsonUtils::CheckJsonType(
++    const Json::Value &root, const JsonCheckList &check_list) {
++  static const std::map<JsonType, bool (Json::Value::*)() const> kCheckRule = {
++      {JsonType::kJsonNullValue, &Json::Value::isNull},
++      {JsonType::kJsonIntValue, &Json::Value::isInt},
++      {JsonType::kJsonInt64Value, &Json::Value::isInt64},
++      {JsonType::kJsonUIntValue, &Json::Value::isUInt},
++      {JsonType::kJsonUInt64Value, &Json::Value::isUInt64},
++      {JsonType::kJsonRealValue, &Json::Value::isDouble},
++      {JsonType::kJsonStringValue, &Json::Value::isString},
++      {JsonType::kJsonBoolValue, &Json::Value::isBool},
++      {JsonType::kJsonArrayValue, &Json::Value::isArray},
++      {JsonType::kJsonObjectValue, &Json::Value::isObject},
++  };
++
++  std::string error_key;
++  return std::make_pair(
++      std::find_if(check_list.begin(), check_list.end(),
++                   [&](const JsonCheckList::value_type &check_item) {
++                     auto rule_iter = kCheckRule.find(check_item.second);
++                     if (rule_iter == kCheckRule.end()) {
++                       return true;
++                     }
++
++                     if (!(root[check_item.first].*(rule_iter->second))()) {
++                       error_key = check_item.first;
++                       return true;
++                     }
++                     return false;
++                   }) == check_list.end(),
++      error_key);
++}
++
++bool JsonUtils::GetIpValue(const Json::Value &root, uint32_t *ip) {
++  *ip = 0;
++
++  if (root.isUInt()) {
++    *ip = root.asUInt();
++    return true;
++  }
++
++  if (root.isString()) {
++    *ip = network::IpToInt(root.asString());
++    return *ip != 0;
++  }
++
++  return false;
++}
++
++bool JsonUtils::GetValue(const Json::Value &root, uint16_t *value) {
++  if (!root.isUInt()) return false;
++
++  *value = static_cast<uint16_t>(root.asUInt());
++  return true;
++}
++
++bool JsonUtils::GetValue(const Json::Value &root, uint32_t *value) {
++  if (!root.isUInt()) return false;
++
++  *value = root.asUInt();
++  return true;
++}
++
++bool JsonUtils::GetValue(const Json::Value &root,
++                         std::vector<std::string> *value) {
++  if (root.isNull() || !root.isArray()) {
++    return false;
++  }
++
++  for (uint32_t i = 0; i < root.size(); ++i) {
++    if (root[i].isString()) {
++      auto str = root[i].asString();
++      if (!str.empty()) value->emplace_back(std::move(str));
++    }
++  }
++  return true;
++}
++
++bool JsonUtils::GetValue(const Json::Value &root,
++                         std::set<std::string> *value) {
++  if (root.isNull() || !root.isArray()) {
++    return false;
++  }
++
++  for (uint32_t i = 0; i < root.size(); ++i) {
++    if (root[i].isString()) {
++      auto str = root[i].asString();
++      if (!str.empty()) value->insert(std::move(str));
++    }
++  }
++
++  return true;
++}
++
++bool JsonUtils::GetValue(const Json::Value &root, std::set<uint32_t> *value,
++                         JsonCppUInt32Operation func) {
++  if (root.isNull() || !root.isArray()) {
++    return false;
++  }
++
++  for (uint32_t i = 0; i < root.size(); ++i) {
++    uint32_t val = 0;
++    if (func(root[i], &val)) {
++      value->insert(val);
++    }
++  }
++
++  return true;
++}
++
++std::string JsonUtils::JsonToString(const rapidjson::Document &root) {
++  if (!root.IsObject()) {
++    return "";
++  }
++
++  rapidjson::StringBuffer buffer;
++  rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
++  root.Accept(writer);
++
++  return buffer.GetString();
++}
++
++bool JsonUtils::StringToJson(const std::string &json_str,
++                             rapidjson::Document *root) {
++  root->Parse(json_str.c_str());
++  if (root->HasParseError() || root->IsNull()) {
++    SAFE_LOG2(Error) << "JsonUtils string to json failed, code: "
++                     << root->GetParseError();
++    return false;
++  }
++  return true;
++}
++
++std::pair<bool, std::string> JsonUtils::CheckJsonType(
++    const rapidjson::Document &root, const JsonCheckList &check_list) {
++  if (root.IsNull()) {
++    return std::make_pair(false, "");
++  }
++
++  static const std::map<JsonType, bool (rapidjson::Value::*)() const>
++      kCheckRule = {
++          {JsonType::kJsonNullValue, &rapidjson::Value::IsNull},
++          {JsonType::kJsonIntValue, &rapidjson::Value::IsInt},
++          {JsonType::kJsonInt64Value, &rapidjson::Value::IsInt64},
++          {JsonType::kJsonUIntValue, &rapidjson::Value::IsUint},
++          {JsonType::kJsonUInt64Value, &rapidjson::Value::IsUint64},
++          {JsonType::kJsonRealValue, &rapidjson::Value::IsDouble},
++          {JsonType::kJsonStringValue, &rapidjson::Value::IsString},
++          {JsonType::kJsonBoolValue, &rapidjson::Value::IsBool},
++          {JsonType::kJsonArrayValue, &rapidjson::Value::IsArray},
++          {JsonType::kJsonObjectValue, &rapidjson::Value::IsObject},
++      };
++
++  std::string error_key;
++  return std::make_pair(
++      std::find_if(check_list.begin(), check_list.end(),
++                   [&](const JsonCheckList::value_type &check_item) {
++                     auto rule_iter = kCheckRule.find(check_item.second);
++                     if (rule_iter == kCheckRule.end()) {
++                       return true;
++                     }
++
++                     auto member_iter =
++                         root.FindMember(check_item.first.c_str());
++                     if (member_iter == root.MemberEnd()) {
++                       error_key = check_item.first;
++                       return true;
++                     }
++
++                     if (!(member_iter->value.*(rule_iter->second))()) {
++                       error_key = check_item.first;
++                       return true;
++                     }
++                     return false;
++                   }) == check_list.end(),
++      error_key);
++}
++
++bool JsonUtils::GetIpValue(const rapidjson::Value &root, const char *name,
++                           uint32_t *ip) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (root[name].IsUint()) {
++    *ip = root[name].GetUint();
++    return true;
++  }
++
++  if (root[name].IsString()) {
++    *ip = network::IpToInt(root[name].GetString());
++    return *ip != 0;
++  }
++
++  return false;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         bool *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (root[name].IsBool()) {
++    *value = root[name].GetBool();
++    return true;
++  }
++
++  if (root[name].IsInt64()) {
++    *value = (root[name].GetInt64() > 0);
++    return true;
++  }
++
++  return false;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         int32_t *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (!root[name].IsInt()) {
++    return false;
++  }
++
++  *value = root[name].GetInt();
++  return true;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         int64_t *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (!root[name].IsInt64()) {
++    return false;
++  }
++
++  *value = root[name].GetInt64();
++  return true;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         uint16_t *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (!root[name].IsUint()) {
++    return false;
++  }
++
++  *value = static_cast<uint16_t>(root[name].GetUint());
++  return true;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         uint32_t *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (!root[name].IsUint()) {
++    return false;
++  }
++
++  *value = root[name].GetUint();
++  return true;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         uint64_t *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (!root[name].IsUint64()) {
++    return false;
++  }
++
++  *value = root[name].GetUint64();
++  return true;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         float *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (!root[name].IsFloat()) {
++    return false;
++  }
++
++  *value = root[name].GetFloat();
++  return true;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         std::string *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (root[name].IsString()) {
++    *value = root[name].GetString();
++    return true;
++  }
++
++  if (root[name].IsInt64()) {
++    *value = std::to_string(root[name].GetInt64());
++    return true;
++  }
++
++  if (root[name].IsUint64()) {
++    *value = std::to_string(root[name].GetUint64());
++    return true;
++  }
++
++  if (root[name].IsBool()) {
++    *value = root[name].GetBool() ? "true" : "false";
++    return true;
++  }
++
++  return false;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         std::vector<std::string> *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (!root[name].IsArray()) {
++    return false;
++  }
++
++  auto array_root = root[name].GetArray();
++  for (uint32_t i = 0; i < array_root.Size(); ++i) {
++    if (array_root[i].IsString()) {
++      std::string str = array_root[i].GetString();
++      if (!str.empty()) value->emplace_back(std::move(str));
++    }
++  }
++  return true;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         std::set<std::string> *value) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (!root[name].IsArray()) {
++    return false;
++  }
++
++  auto array_root = root[name].GetArray();
++  for (uint32_t i = 0; i < array_root.Size(); ++i) {
++    if (array_root[i].IsString()) {
++      std::string str = array_root[i].GetString();
++      if (!str.empty()) value->insert(std::move(str));
++    }
++  }
++  return true;
++}
++
++bool JsonUtils::GetValue(const rapidjson::Value &root, const char *name,
++                         std::set<uint32_t> *value,
++                         RapidJsonUInt32Operation func) {
++  if (!root.HasMember(name)) {
++    return false;
++  }
++
++  if (!root[name].IsArray()) {
++    return false;
++  }
++
++  auto array_root = root[name].GetArray();
++  for (uint32_t i = 0; i < array_root.Size(); ++i) {
++    uint32_t val = 0;
++    if (func(array_root[i], &val)) {
++      value->insert(val);
++    }
++  }
++  return true;
++}
++
++}  // namespace json
++}  // namespace agora
+diff --git a/json/json_utils.h b/json/json_utils.h
+new file mode 100644
+index 0000000..366c972
+--- /dev/null
++++ b/json/json_utils.h
+@@ -0,0 +1,181 @@
++// Copyright (c) 2014-2017 Agora.io, Inc.
++// Created by shanhui.
++//
++
++#pragma once  // NOLINT(build/header_guard)
++
++#include <json/json.h>
++#include <rapidjson/document.h>
++
++#include <functional>
++#include <map>
++#include <set>
++#include <string>
++#include <utility>
++#include <vector>
++#include <iostream>
++
++namespace agora {
++namespace json {
++
++enum class JsonType {
++  kJsonNullValue,
++  kJsonIntValue,
++  kJsonInt64Value,
++  kJsonUIntValue,
++  kJsonUInt64Value,
++  kJsonRealValue,
++  kJsonStringValue,
++  kJsonBoolValue,
++  kJsonArrayValue,
++  kJsonObjectValue,
++};
++
++using JsonCheckList = std::map<std::string, JsonType>;
++
++class JsonUtils {
++ public:
++  using JsonCppUInt32Operation =
++      std::function<bool(const Json::Value &, uint32_t *)>;
++  using RapidJsonUInt32Operation =
++      std::function<bool(const rapidjson::Value &, uint32_t *)>;
++
++  // For jsoncpp
++  static std::string JsonToString(const Json::Value &root);
++
++  static bool StringToJson(const std::string &json_str, Json::Value *root);
++
++  static std::pair<bool, std::string> CheckJsonType(
++      const Json::Value &root, const JsonCheckList &check_list);
++
++  static bool GetIpValue(const Json::Value &root, uint32_t *ip);
++
++  static bool GetValue(const Json::Value &root, uint16_t *value);
++
++  static bool GetValue(const Json::Value &root, uint32_t *value);
++
++  static bool GetValue(const Json::Value &root,
++                       std::vector<std::string> *value);
++
++  static bool GetValue(const Json::Value &root, std::set<std::string> *value);
++
++  static bool GetValue(const Json::Value &root, std::set<uint32_t> *value,
++                       JsonCppUInt32Operation func);
++
++  // For rapidjson
++  static std::string JsonToString(const rapidjson::Document &root);
++
++  static bool StringToJson(const std::string &json_str,
++                           rapidjson::Document *root);
++
++  static std::pair<bool, std::string> CheckJsonType(
++      const rapidjson::Document &root, const JsonCheckList &check_list);
++
++  static bool GetIpValue(const rapidjson::Value &root, const char *name,
++                         uint32_t *ip);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       bool *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       int32_t *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       int64_t *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       uint16_t *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       uint32_t *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       uint64_t *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       float *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       std::string *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       std::vector<std::string> *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       std::set<std::string> *value);
++
++  static bool GetValue(const rapidjson::Value &root, const char *name,
++                       std::set<uint32_t> *value,
++                       RapidJsonUInt32Operation func);
++
++  static inline void string_handler(std::string *value) {
++    if (value->find("://") != std::string::npos) {
++      std::string::size_type n = value->rfind('/');
++      value->replace(n+1, std::string::npos, "******");
++    } else {
++      value->replace(value->size()/3, value->size()/3, "******");
++    }
++  }
++
++  static inline void EncodeJsonByKey(rapidjson::Document *root,
++                                       const std::string &key) {
++    const auto& iter = root->FindMember(key.c_str());
++    auto &allocator = root->GetAllocator();
++    if (iter != root->MemberEnd()) {
++      // Just encode string value
++      if (iter->value.IsString()) {
++        std::string value(iter->value.GetString());
++        string_handler(&value);
++        iter->value.SetString(value.c_str(), value.size(), allocator);
++      }
++      // The common search can succeed here
++      return;
++    } else {
++      for (auto m = root->MemberBegin(); m != root->MemberEnd(); ++m) {
++        std::string k_name(m->name.GetString());
++        std::cout << "key name:" << k_name << std::endl;
++        if (m->value.IsObject()) {
++          std::cout << "enter here" << std::endl;
++          const auto& l1 = m->value.GetObject();
++          const auto &iter1 = l1.FindMember(key.c_str());
++          if (iter1 != l1.MemberEnd() && iter1->value.IsString()) {
++            std::string tmp_l1(iter1->value.GetString());
++            string_handler(&tmp_l1);
++            iter1->value.SetString(tmp_l1.c_str(), tmp_l1.size(), allocator);
++            return;
++          }
++        } else if (m->value.IsArray()) {
++          for (auto& n : m->value.GetArray()) {
++            if (n.IsObject()) {
++              const auto& l2 = n.GetObject();
++              const auto &iter2 = l2.FindMember(key.c_str());
++              if (iter2 != l2.MemberEnd() && iter2->value.IsString()) {
++                std::string tmp_l2(iter2->value.GetString());
++                string_handler(&tmp_l2);
++                iter2->value.SetString(tmp_l2.c_str(), tmp_l2.size(),
++                                                             allocator);
++              } else {
++                break;
++              }
++            }
++          }
++        }
++      }
++    }
++  }
++
++  template <typename... Ts>
++  static std::string JsonToStringEncode(
++         const rapidjson::Document &root, Ts &&... keys) {
++    rapidjson::Document new_root;
++    new_root.SetObject();
++    auto &allocator = new_root.GetAllocator();
++    new_root.CopyFrom(root, allocator);
++    auto a = {(EncodeJsonByKey(&new_root, std::forward<Ts>(keys)), 0)...};
++    (void)a;
++    return JsonToString(new_root);
++  }
++};
++
++}  // namespace json
++}  // namespace agora
+diff --git a/json/json_utils_test.cpp b/json/json_utils_test.cpp
+new file mode 100644
+index 0000000..e0ff1a6
+--- /dev/null
++++ b/json/json_utils_test.cpp
+@@ -0,0 +1,98 @@
++// Copyright (c) 2020 Agora.io, Inc.
++// UnitTests for json utils
++//
++
++#include <algorithm>
++#include <iostream>
++#include <map>
++#include <string>
++#include <tuple>
++#include <utility>
++#include <vector>
++
++#include "media_server_library/json/json_utils.h"
++
++#include "gtest/gtest.h"
++
++
++#include "third_party/rapidjson/stringbuffer.h"
++#include "third_party/rapidjson/writer.h"
++
++namespace agora {
++namespace json {
++namespace unittest {
++
++void PrintJSON2(const rapidjson::Value& val) {
++  rapidjson::StringBuffer buf;
++  rapidjson::Writer<rapidjson::StringBuffer> writer(buf);
++
++  val.Accept(writer);
++  std::string str;
++  std::copy(buf.GetString(), buf.GetString() + buf.GetSize(),
++            std::back_inserter(str));
++  std::cout << str << std::endl;
++}
++
++TEST(JsonUtilsTest, encodeValueFromKey) {
++  rapidjson::Document doc;
++  doc.SetObject();
++
++  auto &allocator = doc.GetAllocator();
++  std::string cmd = "CoverageAllocateEdge";
++  doc.AddMember("command", rapidjson::Value(cmd.c_str(), cmd.size(),
++               allocator).Move(), allocator);
++  std::string appid = "aab8b8f5a8cd4469a63042fcfafe7063";
++  doc.AddMember("appId", rapidjson::Value(appid.c_str(), appid.size(),
++               doc.GetAllocator()).Move(), doc.GetAllocator());
++  std::string cname = "mix_streaming_test";
++  doc.AddMember("cname", rapidjson::Value(cname.c_str(), cname.size(),
++               allocator).Move(), allocator);
++  std::string token = "007eJxTYDCVtLiRZcryQ005w2T28rOzWPlcHIwsLIGAAFyR9y";
++  doc.AddMember("appToken", rapidjson::Value(
++               token.c_str(), token.size(), allocator).Move(), allocator);
++  std::string url =
++  "rtmp://vid-218.push.chinanetcenter.broadcastapp.agora.io" \
++  "/live/test1599534641512";
++  doc.AddMember("url", rapidjson::Value(
++               url.c_str(), url.size(), allocator).Move(), allocator);
++
++  rapidjson::Value t_list(rapidjson::kArrayType);
++  rapidjson::Value tt(rapidjson::kObjectType);
++  std::string account = "WM-mix_streaming-6c0aeaa7c647abf568d51c86f99cbd6a";
++  tt.AddMember("rtmAccount", rapidjson::Value(account.c_str(),
++              account.size(), allocator).Move(), allocator);
++  t_list.PushBack(tt.Move(), allocator);
++
++  rapidjson::Value tt2(rapidjson::kObjectType);
++  account = "WM-mix_streaming-6c0aeaa7c647abf568d51c86f99cbd88";
++  tt2.AddMember("rtmAccount", rapidjson::Value(account.c_str(),
++              account.size(), allocator).Move(), allocator);
++  t_list.PushBack(tt2.Move(), allocator);
++  std::string key = "servers";
++  doc.AddMember(rapidjson::Value(key.c_str(), key.size(), allocator).Move(),
++               t_list.Move(), allocator);
++
++  // rapidjson::Value t_obj(rapidjson::kObjectType);
++  rapidjson::Value tt3(rapidjson::kObjectType);
++  std::string host = "tcp://127.0.0.1:3325";
++  tt3.AddMember("host", rapidjson::Value(host.c_str(),
++               host.size(), allocator).Move(), allocator);
++  std::string passwd = "appcenterbestvoip";
++  tt3.AddMember("passwd", rapidjson::Value(passwd.c_str(),
++               passwd.size(), allocator).Move(), allocator);
++  key = "database";
++  doc.AddMember(rapidjson::Value(key.c_str(), key.size(),
++               allocator).Move(), tt3.Move(), allocator);
++
++  PrintJSON2(doc);
++
++  std::string result =
++        json::JsonUtils::JsonToStringEncode(doc,
++               "appId", "cname", "appToken", "url", "rtmAccount", "passwd");
++  std::cout << result << std::endl;
++  EXPECT_EQ(true, true);
++}
++
++}  // namespace unittest
++}  // namespace json
++}  // namespace agora
