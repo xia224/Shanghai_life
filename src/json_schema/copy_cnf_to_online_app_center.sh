@@ -31,9 +31,9 @@ copy_and_update_conf_func(){
    sudo cp app-center.json app-center.json.old
    sudo cp /tmp/new-app-center.json app-center.json
    echo "***Old configuration file md5: "
-   md5 app-center.json.old
+   md5sum app-center.json.old
    echo "***New configuration file md5: "
-   md5 app-center.json
+   md5sum app-center.json
    grep -m 1 "DataCenter AppCenter vendor_region" <(tail -n 100 -f /data/uap/mix_streaming/log/app_center.exe.DEBUG) 
 EOF
 }
